@@ -1,4 +1,3 @@
-
 import io.socket.emitter.Emitter;
 import jsclub.codefest.sdk.Hero;
 import jsclub.codefest.sdk.algorithm.PathUtils;
@@ -9,6 +8,7 @@ import jsclub.codefest.sdk.model.npcs.Ally;
 import jsclub.codefest.sdk.model.obstacles.Obstacle;
 import jsclub.codefest.sdk.model.players.Player;
 import jsclub.codefest.sdk.model.support_items.SupportItem;
+import jsclub.codefest.sdk.model.weapon.Bullet;
 import jsclub.codefest.sdk.model.weapon.Weapon;
 
 import java.io.IOException;
@@ -19,7 +19,7 @@ import static jsclub.codefest.sdk.algorithm.PathUtils.*;
 
 public class Main {
     private static final String SERVER_URL = "https://cf25-server.jsclub.dev";
-    private static final String GAME_ID = "110624";
+    private static final String GAME_ID = "102995" ;
     private static final String PLAYER_NAME = "Noobslearn2code";
     private static final String SECRET_KEY = "sk-_2Aq7gTHQC6lVatMMbLInA:xRnFCNn0V3hoOZA4Iy4RL66QfAC4RPnMw8BvV7gH32KgVBjbaU1kHh48wxGLPezcxTK7rkDF-LHK4AtDm1TskA";
 
@@ -41,12 +41,116 @@ class MapUpdateListener implements Emitter.Listener {
     private final Hero hero;
     // Global variable to track the last time hero shoots
     private long lastShootTime = 0;
-
+    private int countTimeToRandomMove = 8;
+    private int numberOfMoved = 0;
+    boolean justOpenedChest = false;
+    private int chestAttackRange = 6;
     public MapUpdateListener(Hero hero) {
         this.hero = hero;
     }
 
     @Override
+//    public void call(Object... args) {
+//        try {
+//            if (args == null || args.length == 0) return;
+//
+//            GameMap gameMap = hero.getGameMap();
+//            gameMap.updateOnUpdateMap(args[0]);
+//            Player player = gameMap.getCurrentPlayer();
+//
+//            if (player == null || player.getHealth() == 0) {
+//                System.out.println("Player is dead or data is not available.");
+//                return;
+//            }
+//
+//            List<Node> nodesToAvoid = getNodesToAvoid(gameMap);
+//            if (numberOfMoved >= countTimeToRandomMove) {
+//                String randomMove;
+//
+//                int dir = (int)(Math.random() * 4);
+//                switch (dir) {
+//                    case 0:
+//                        randomMove = "u";
+//                        break;
+//                    case 1:
+//                        randomMove = "d";
+//                        break;
+//                    case 2:
+//                        randomMove = "l";
+//                        break;
+//                    default:
+//                        randomMove = "r";
+//                        break;
+//                }
+//
+//                hero.move(randomMove);
+//                System.out.println("[BOT] Random move triggered after " + countTimeToRandomMove + " moves: " + randomMove);
+//
+//                numberOfMoved = 0; // reset sau khi random move
+//                return ;
+//            }
+//
+//            if (player.getHealth() <= 10 && findPathToHealth(gameMap,nodesToAvoid,player)!=null) {
+//                // Ưu tiên tiếp theo: Hồi phục khi máu thấp
+//                heal(gameMap, nodesToAvoid, player);
+//                return ;
+//            }
+//            if (hero.getInventory().getGun() == null && getNearestGun(gameMap,player) != null){
+//                handleSearchForGun(gameMap,player,nodesToAvoid);
+//                return ;
+//            }
+//            if(hero.getInventory().getMelee().getId().equals("HAND") && getNearestChest(gameMap,player) != null){
+//                pickNearestChest(gameMap,player,nodesToAvoid);
+//                return;
+//            }
+//            if(getNearestArmorInRange(gameMap,player) != null){
+//                if (hero.getInventory().getArmor() == null) {
+//                    pickNearestArmor(gameMap, player, nodesToAvoid);
+//                    return;
+//                }
+//                if(getNearestArmorInRange(gameMap,player).getDamageReduce() > hero.getInventory().getArmor().getDamageReduce()){
+//                    pickNearestArmor(gameMap,player,nodesToAvoid);
+//                    return;
+//                }
+//
+//            }
+////            if(getNearestSpecialInRange(gameMap,player) != null){
+////                pickNearestSpecial(gameMap,player,nodesToAvoid);
+////            }
+//            if(getNearestThrowableInRange(gameMap,player) != null){
+//                if(hero.getInventory().getThrowable() == null){
+//                    pickNearestThrowable(gameMap,player,nodesToAvoid);
+//                    return;
+//                }
+//                if(getNearestThrowableInRange(gameMap,player).getDamage() > hero.getInventory().getThrowable().getDamage()){
+//                    pickNearestThrowable(gameMap,player,nodesToAvoid);
+//                    return ;
+//                }
+//            }
+//            if (hero.getInventory().getMelee().getId().equals("HAND") && getNearestMelee(gameMap,player) != null){
+//                pickNearestWeapon(gameMap,player,nodesToAvoid);
+//                return;
+//            }
+//
+//            // Cuối cùng: Tấn công khi đã có súng và máu ổn
+//            attackNearestBot(gameMap, player, nodesToAvoid);
+//
+//
+//
+//
+//
+//
+//
+//            // End code here
+//            System.out.println("Last shoot time: " + lastShootTime);return ;
+//
+//
+//        } catch (Exception e) {
+//            System.err.println("Critical error in call method: " + e.getMessage());
+//            e.printStackTrace();
+//        }
+//    }
+
     public void call(Object... args) {
         try {
             if (args == null || args.length == 0) return;
@@ -61,35 +165,154 @@ class MapUpdateListener implements Emitter.Listener {
             }
 
             List<Node> nodesToAvoid = getNodesToAvoid(gameMap);
-            if (player.getHealth() <= 10 && findPathToHealth(gameMap,nodesToAvoid,player)!=null) {
-                // Ưu tiên tiếp theo: Hồi phục khi máu thấp
+
+            // 1️⃣ Random move an toàn nếu đủ tick
+            if (numberOfMoved >= countTimeToRandomMove) {
+                String randomMove;
+
+               int dir = (int)(Math.random() * 4);
+               switch (dir) {                    case 0:                    randomMove = "u";
+                        break;
+                    case 1:
+                        randomMove = "d";
+                        break;
+                    case 2:
+                        randomMove = "l";
+                        break;
+                    default:
+                        randomMove = "r";
+                        break;
+                }
+
+                hero.move(randomMove);
+                System.out.println("[BOT] Random move triggered after " + countTimeToRandomMove + " moves: " + randomMove);
+                numberOfMoved = 0;
+                return;
+            }
+
+            // 2️⃣ Loot item gần sau khi phá rương
+            if (justOpenedChest) {
+                if (pickupNearbyLoot(gameMap, player, nodesToAvoid)) {
+                    System.out.println("[BOT] Looted nearby item after chest.");
+                    return;
+                } else {
+                    justOpenedChest = false; // không còn loot gần
+                }
+            }
+
+            // 3️⃣ Cache các giá trị để tránh gọi lặp
+            Weapon nearestGun = getNearestGun(gameMap, player);
+            Obstacle nearestChest = getNearestChest(gameMap, player);
+            Weapon nearestMelee = getNearestMelee(gameMap, player);
+            Armor nearestArmor = getNearestArmorInRange(gameMap, player);
+            Weapon nearestThrowable = getNearestThrowableInRange(gameMap, player);
+            Player nearestBot = getNearestBot(gameMap, player);
+
+            // 4️⃣ FSM ưu tiên:
+            // Heal khi máu thấp
+            if (player.getHealth() <= 5 && findPathToHealth(gameMap, nodesToAvoid, player) != null) {
                 heal(gameMap, nodesToAvoid, player);
-            }
-            else if (hero.getInventory().getGun() == null && getNearestGun(gameMap,player) != null){
-                handleSearchForGun(gameMap,player,nodesToAvoid);
-            }
-            else if (hero.getInventory().getMelee().getId().equals("HAND") && getNearestMelee(gameMap,player) != null){
-                pickNearestWeapon(gameMap,player,nodesToAvoid);
-            }
-            else if(hero.getInventory().getMelee().getId().equals("HAND") && getNearestChest(gameMap,player) != null){
-                pickNearestChest(gameMap,player,nodesToAvoid);
-            }
-            else {
-                // Cuối cùng: Tấn công khi đã có súng và máu ổn
-                attackNearestBot(gameMap, player, nodesToAvoid);
+                return;
             }
 
+            // Tìm súng khi chưa có
+            if (hero.getInventory().getGun() == null && nearestGun != null) {
+                handleSearchForGun(gameMap, player, nodesToAvoid);
+                return;
+            }
 
+            // Nhặt melee trước khi phá rương
+            if (hero.getInventory().getMelee().getId().equals("HAND") && nearestMelee != null) {
+                pickNearestWeapon(gameMap, player, nodesToAvoid);
+                return;
+            }
 
+            // Phá rương khi còn cầm tay không
+            if (hero.getInventory().getMelee().getId().equals("HAND") && nearestChest != null) {
+                pickNearestChest(gameMap, player, nodesToAvoid);
+                justOpenedChest = true;
+                return;
+            }
 
+            // Loot armor nếu tốt hơn hoặc chưa có
+            if (nearestArmor != null) {
+                if (hero.getInventory().getArmor() == null){
+                    pickNearestArmor(gameMap, player, nodesToAvoid);
+                    return;
+                }
+                else {
+                    hero.revokeItem(hero.getInventory().getArmor().getId());
+                    pickNearestArmor(gameMap, player, nodesToAvoid);
+                    return;
+                }
+            }
 
-            // End code here
+            // Loot throwable nếu tốt hơn hoặc chưa có
+            if (nearestThrowable != null) {
+                if (hero.getInventory().getThrowable() == null) {
+                    pickNearestThrowable(gameMap, player, nodesToAvoid);
+                    return;
+                }
+                else {
+                    hero.revokeItem(hero.getInventory().getThrowable().getId());
+                    pickNearestThrowable(gameMap, player, nodesToAvoid);
+                }
+            }
+
+            // 5️⃣ Cuối cùng: Attack bot
+            if (nearestChest != null && nearestBot != null) {
+                int distToChest = distance(player, nearestChest);
+                int distToBot = distance(player, nearestBot);
+
+                if (distToChest < distToBot && distToChest <= chestAttackRange) {
+                    if(!getShortestPath(gameMap,nodesToAvoid,player,nearestChest,false).isEmpty()){
+                        hero.move(getShortestPath(gameMap,nodesToAvoid,player,nearestChest,false));
+                    }else{
+                        hero.attack(directionToChest(player,nearestChest));
+                        System.out.println("[BOT] Attacking chest as it is closer than bot within range " + chestAttackRange);
+                        return;
+                    }
+                }
+            }
+
+            attackNearestBot(gameMap, player, nodesToAvoid);
+
             System.out.println("Last shoot time: " + lastShootTime);
 
         } catch (Exception e) {
             System.err.println("Critical error in call method: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    private boolean pickupNearbyLoot(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
+        int pickupRange = 1;
+
+        Weapon melee = getNearestWeapon(gameMap, player);
+        if (hero.getInventory().getMelee().getId().equals("HAND") && melee != null) {
+            pickNearestWeapon(gameMap, player, nodesToAvoid);
+            return true;
+        }
+
+        Weapon gun = getNearestGun(gameMap, player);
+        if (hero.getInventory().getGun() == null && gun != null) {
+            handleSearchForGun(gameMap, player, nodesToAvoid);
+            return true;
+        }
+
+        Weapon throwable = getNearestThrowableInRange(gameMap, player);
+        if (hero.getInventory().getThrowable() == null && throwable != null) {
+            pickNearestThrowable(gameMap, player, nodesToAvoid);
+            return true;
+        }
+
+        Armor armor = getNearestArmorInRange(gameMap, player);
+        if (hero.getInventory().getArmor() == null && armor != null) {
+            pickNearestArmor(gameMap, player, nodesToAvoid);
+            return true;
+        }
+
+        return false;
     }
 
 
@@ -101,7 +324,6 @@ class MapUpdateListener implements Emitter.Listener {
         nodes.addAll(gameMap.getOtherPlayerInfo());
         nodes.addAll(gameMap.getObstaclesByTag("TRAP"));
         nodes.addAll(gameMap.getObstaclesByTag("DESTRUCTIBLE"));
-        nodes.addAll(gameMap.getListEnemies());
         return nodes;
     }
 
@@ -114,7 +336,7 @@ class MapUpdateListener implements Emitter.Listener {
 
     // Private Function
 
-    // Find nearest object
+    // Find object
     private Weapon getNearestGun(GameMap gameMap, Player player) {
         List<Weapon> guns = gameMap.getAllGun();
         Weapon nearestGun = null;
@@ -199,20 +421,16 @@ class MapUpdateListener implements Emitter.Listener {
         }
         return nearestAlliance;
     }
-    private Armor getNearestArmor(GameMap gameMap,Player player) {
+    private Armor getNearestArmorInRange(GameMap gameMap,Player player) {
         List<Armor> armors = gameMap.getListArmors();
         Armor nearestArmor = null;
         double minDistance = Double.MAX_VALUE;
         for (Armor armor : armors) {
-            if (armor.getX() < (gameMap.getMapSize()/2 - gameMap.getSafeZone()) ||
-                    armor.getX() > (gameMap.getMapSize()/2 + gameMap.getSafeZone()) ||
-                    armor.getY() < (gameMap.getMapSize()/2 - gameMap.getSafeZone()) ||
-                    armor.getY() > (gameMap.getMapSize()/2 + gameMap.getSafeZone()))
-            {
+            if(!checkInsideSafeArea(armor, gameMap.getSafeZone(), gameMap.getMapSize())){
                 continue;
             }
             double distance = distance(player, armor);
-            if (distance < minDistance) {
+            if (distance < minDistance && distance < 4) {
                 minDistance = distance;
                 nearestArmor = armor;
             }
@@ -220,14 +438,14 @@ class MapUpdateListener implements Emitter.Listener {
         return nearestArmor;
     }
 
-    private SupportItem getNearestSupportItem(GameMap gameMap,Player player) {
+    private SupportItem getNearestSupportItemInRange(GameMap gameMap,Player player) {
         List<SupportItem> supportItems = gameMap.getListSupportItems();
         SupportItem nearestSupportItem = null;
         double minDistance = Double.MAX_VALUE;
         for (SupportItem supportItem : supportItems) {
             if (checkInsideSafeArea(supportItem, gameMap.getSafeZone(), gameMap.getMapSize())){
                 double distance = distance(player, supportItem);
-                if (distance < minDistance) {
+                if (distance < minDistance && distance < 4) {
                     minDistance = distance;
                     nearestSupportItem = supportItem;
                 }
@@ -252,8 +470,8 @@ class MapUpdateListener implements Emitter.Listener {
         }
         return nearestMelee;
     }
-    // Get Nearest Throwable  Weapon
-    private Weapon getNearestThrowable(GameMap gameMap, Player player) {
+    // Get Nearest Throwable Weapon
+    private Weapon getNearestThrowableInRange(GameMap gameMap, Player player) {
         List<Weapon> throwables = gameMap.getAllThrowable();
         Weapon nearestThrowable = null;
         double minDistance = Double.MAX_VALUE;
@@ -261,7 +479,7 @@ class MapUpdateListener implements Emitter.Listener {
         for (Weapon throwable : throwables) {
             if (checkInsideSafeArea(throwable, gameMap.getSafeZone(), gameMap.getMapSize())) {
                 double distance = distance(player, throwable);
-                if (distance < minDistance) {
+                if (distance < minDistance && distance < 4) {
                     minDistance = distance;
                     nearestThrowable = throwable;
                 }
@@ -270,14 +488,14 @@ class MapUpdateListener implements Emitter.Listener {
         return nearestThrowable;
     }
 
-    private Weapon getNearestSpecial(GameMap gameMap, Player player) {
+    private Weapon getNearestSpecialInRange(GameMap gameMap, Player player) {
         List<Weapon> specials = gameMap.getAllSpecial();
         Weapon nearestSpecial = null;
         double minDistance = Double.MAX_VALUE;
         for (Weapon special : specials) {
             if (checkInsideSafeArea(special, gameMap.getSafeZone(), gameMap.getMapSize())) {
                 double distance = distance(player, special);
-                if (distance < minDistance) {
+                if (distance < minDistance && distance < 4) {
                     minDistance = distance;
                     nearestSpecial = special;
                 }
@@ -320,7 +538,7 @@ class MapUpdateListener implements Emitter.Listener {
 
 
 
-    // Find Path to the object
+    // Find a path
     private String findPathToEnemy(GameMap gameMap,List<Node> nodesToAvoid, Player player) {
         Player e =  getNearestBot(gameMap, player);
         if (e == null) return null;
@@ -344,7 +562,7 @@ class MapUpdateListener implements Emitter.Listener {
         return PathUtils.getShortestPath(gameMap, nodesToAvoid, player, nearestHealth, false);
     }
     private String findPathToArmor(GameMap gameMap, List<Node> nodesToAvoid, Player player) {
-        Armor nearestArmor = getNearestArmor(gameMap,player);
+        Armor nearestArmor = getNearestArmorInRange(gameMap,player);
         if (nearestArmor == null) {
             System.out.println("No nearest armor found.");
             return null;
@@ -360,11 +578,97 @@ class MapUpdateListener implements Emitter.Listener {
         return PathUtils.getShortestPath(gameMap,nodesToAvooid,player,nearestWeapon,false);
     }
 
+    private String findPathToSpecial(GameMap gameMap, List<Node> nodesToAvoid, Player player) {
+        Weapon nearestSpecial = getNearestSpecialInRange(gameMap, player);
+        if (nearestSpecial == null) {
+            System.out.println("No nearest special found.");
+            return null;
+        }
+        return PathUtils.getShortestPath(gameMap, nodesToAvoid, player, nearestSpecial, false);
+    }
+
+    private String findPathToThrowable(GameMap gameMap, List<Node> nodesToAvoid, Player player){
+        Weapon nearestThrowable = getNearestThrowableInRange(gameMap, player);
+        if (nearestThrowable == null) {
+            System.out.println("No nearest throwable found.");
+            return null;
+        }
+        return PathUtils.getShortestPath(gameMap, nodesToAvoid, player, nearestThrowable, false);
+    }
+
+
+    private boolean isDangerNearby(GameMap gameMap, Player player) {
+        List<Node> dangerNodes = preCaculatedNode(gameMap);
+        if (dangerNodes.isEmpty()) return false;
+        for (Node danger : dangerNodes) {
+            if (danger.getX() == player.getX() && danger.getY() == player.getY()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 
 
-
-    // Take Nearest object
+    // Moving and doing
+//    private void attackNearestBot(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
+//        Player e = getNearestBot(gameMap, player);
+//        if (e == null) return;
+//
+//        // Check đạn sắp tới trước, nếu có => ưu tiên di chuyển tránh
+//        if (isDangerNearby(gameMap, player)) {
+//            System.out.println("[Bot] Danger detected! Prioritizing dodge.");
+//            List<Node> tmpNodesToAvoid = preCaculatedNode(gameMap);
+//            nodesToAvoid.addAll(tmpNodesToAvoid);
+//            String safePath = findPathToEnemy(gameMap, nodesToAvoid, player); // tìm path an toàn
+//            hero.move(safePath);
+//            nodesToAvoid.removeAll(tmpNodesToAvoid);
+//            return;
+//        }
+//
+//        String pathToBot = findPathToEnemy(gameMap, nodesToAvoid, player);
+//        if (pathToBot == null) return;
+//
+//        int distanceX = Math.abs(player.getX() - e.getX());
+//        int distanceY = Math.abs(player.getY() - e.getY());
+//        int gunRange = hero.getInventory().getGun().getRange()[1];
+//        int currentStep = gameMap.getStepNumber();
+//        double cooldown = hero.getInventory().getGun().getCooldown();
+//        boolean canShoot = (currentStep - lastShootTime >= Math.ceil(cooldown));
+//
+//        // Bắn nếu đủ cooldown và trong tầm
+//        if (player.getX() == e.getX() && distanceY <= gunRange && canShoot) {
+//            hero.shoot(player.getY() > e.getY() ? "d" : "u");
+//            lastShootTime = currentStep;
+//            System.out.println("[Bot] Shoot vertically.");
+//            return;
+//        }
+//
+//        if (player.getY() == e.getY() && distanceX <= gunRange && canShoot) {
+//            hero.shoot(player.getX() < e.getX() ? "r" : "l");
+//            lastShootTime = currentStep;
+//            System.out.println("[Bot] Shoot horizontally.");
+//            return;
+//        }
+//
+//        // Nếu đã sát enemy => melee
+//        if (distanceX + distanceY == 1) {
+//            String dir = directionTo(player, e);
+//            hero.attack(dir);
+//            System.out.println("[Bot] Melee attack: " + dir);
+//            return;
+//        }
+//
+//        // Nếu không có đạn nguy hiểm => tiếp tục di chuyển đến bot
+//        List<Node> tmpNodesToAvoid = preCaculatedNode(gameMap);
+//        nodesToAvoid.addAll(tmpNodesToAvoid);
+//        pathToBot = findPathToEnemy(gameMap, tmpNodesToAvoid, player);
+//        if (pathToBot != null) {
+//            hero.move(pathToBot);
+//            System.out.println("[Bot] Move to bot: " + pathToBot);
+//        }
+//        nodesToAvoid.removeAll(tmpNodesToAvoid);
+//    }
     private void attackNearestBot(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
         Player e = getNearestBot(gameMap, player);
         if (e == null) return;
@@ -378,6 +682,24 @@ class MapUpdateListener implements Emitter.Listener {
         int currentStep = gameMap.getStepNumber();
         double cooldown = hero.getInventory().getGun().getCooldown();
         boolean canShoot = (currentStep - lastShootTime >= cooldown);
+
+        // Use throwable if an enemy in range
+        if (hero.getInventory().getThrowable() != null) {
+            int throwRange = hero.getInventory().getThrowable().getRange()[1];
+            int explosionRange = hero.getInventory().getThrowable().getExplodeRange();
+            String[] directions = {"u", "d", "l", "r"};
+
+            for (String dir : directions) {
+                for (int d = 1; d <= throwRange; d++) {
+                    if (willHitEnemyWithThrowable(player, e, dir, d, explosionRange)) {
+                        hero.throwItem(dir);
+                        System.out.println("[Bot] Threw throwable at enemy in direction: " + dir);
+                        return;
+                    }
+                }
+            }
+        }
+
 
         // Bắn nếu đủ cooldown và trong tầm
         if (player.getX() == e.getX() && distanceY <= gunRange && canShoot) {
@@ -402,6 +724,8 @@ class MapUpdateListener implements Emitter.Listener {
 
         // Nếu không bắn, không attack => di chuyển
         hero.move(pathToBot);
+        numberOfMoved++;
+
         System.out.println("Move to bot: " + pathToBot);
     }
 
@@ -415,17 +739,68 @@ class MapUpdateListener implements Emitter.Listener {
             } else if (dy > 0) {
                 return "u";
             }
-        } else if (dy == 0) {
+        }
+        if (dy == 0) {
             if (dx < 0) {
-                return "r";
-            } else if (dx > 0) {
                 return "l";
+            } else if (dx > 0) {
+                return "r";
+            }
+        }
+    
+        // If not in same row/column, return empty string
+        return "";
+    }
+    private String directionToChest(Player player, Obstacle e) {
+        int dx = e.getX() - player.getX();
+        int dy = e.getY() - player.getY();
+
+        if (dx == 0) {
+            if (dy < 0) {
+                return "d";
+            } else if (dy > 0) {
+                return "u";
+            }
+        }
+        if (dy == 0) {
+            if (dx < 0) {
+                return "l";
+            } else if (dx > 0) {
+                return "r";
             }
         }
 
-        // Nếu không cùng hàng/cột, không trả hướng tấn công
+        // If not in same row/column, return empty string
         return "";
     }
+
+    private boolean willHitEnemyWithThrowable(Player player, Player enemy, String direction, int throwDistance, int explosionRange) {
+        int explosionX = player.getX();
+        int explosionY = player.getY();
+
+        switch (direction) {
+            case "d":
+                explosionY -= throwDistance;
+                break;
+            case "u":
+                explosionY += throwDistance;
+                break;
+            case "l":
+                explosionX -= throwDistance;
+                break;
+            case "r":
+                explosionX += throwDistance;
+                break;
+            default:
+                return false; // Phòng lỗi nếu truyền sai direction
+        }
+
+        int distance = Math.abs(explosionX - enemy.getX()) + Math.abs(explosionY - enemy.getY());
+        return distance <= explosionRange;
+    }
+
+
+
     private void pickNearestChest(GameMap gameMap,Player player, List<Node> nodesToAvoid) throws IOException {
         System.out.println("Getting nearest chest.");
         String pathToChest = findPathToChest(gameMap, nodesToAvoid, player);
@@ -439,6 +814,7 @@ class MapUpdateListener implements Emitter.Listener {
         }
         else {
             hero.move(pathToChest);
+            numberOfMoved ++;
         }
     }
 
@@ -451,6 +827,8 @@ class MapUpdateListener implements Emitter.Listener {
         }
         System.out.println("Health found: " + pathToHealth);
         hero.move(pathToHealth);
+        numberOfMoved ++;
+
     }
     private void handleSearchForGun(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
         System.out.println("No gun found. Searching for a gun.");
@@ -461,6 +839,7 @@ class MapUpdateListener implements Emitter.Listener {
                 hero.pickupItem();
             } else {
                 hero.move(pathToGun);
+                numberOfMoved ++;
             }
         }
     }
@@ -474,6 +853,33 @@ class MapUpdateListener implements Emitter.Listener {
             }
             else {
                 hero.move(pathToArmor);
+                numberOfMoved ++;
+            }
+        }
+    }
+    private void pickNearestSpecial(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
+        System.out.println("No special found. Searching for a special.");
+        String pathToSpecial = findPathToSpecial(gameMap, nodesToAvoid, player);
+        if (pathToSpecial != null) {
+            if (pathToSpecial.isEmpty()) {
+                hero.pickupItem();
+            }
+            else {
+                hero.move(pathToSpecial);
+                numberOfMoved ++;
+            }
+        }
+    }
+    private void pickNearestThrowable(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
+        System.out.println("No throwable found. Searching for a throwable.");
+        String pathToThrowable = findPathToThrowable(gameMap, nodesToAvoid, player);
+        if (pathToThrowable != null) {
+            if (pathToThrowable.isEmpty()) {
+                hero.pickupItem();
+            }
+            else {
+                hero.move(pathToThrowable);
+                numberOfMoved ++;
             }
         }
     }
@@ -486,9 +892,39 @@ class MapUpdateListener implements Emitter.Listener {
             }
             else {
                 hero.move(pathToWeapon);
+                numberOfMoved ++;
             }
         }
     }
+    private List<Node> preCaculatedNode(GameMap gameMap) {
+        List<Node> nodes = new ArrayList<>();
+        if (gameMap.getListBullets() == null) return nodes;
+
+        for (int i = 0; i < gameMap.getListBullets().size(); i++) {
+            Bullet bullet = gameMap.getListBullets().get(i);
+            Node position = bullet.getPosition();
+            if (position == null) continue;
+
+            int dx = Integer.compare(bullet.getDestinationX(), position.getX());
+            int dy = Integer.compare(bullet.getDestinationY(), position.getY());
+
+            for (int j = 1; j <= bullet.getSpeed(); j++) {
+                int newX = position.getX() + (dx * j) + 1;
+                int newY = position.getY() + (dy * j) + 1;
+
+                // Add boundary check based on map size
+                if (isValidPosition(newX, newY, gameMap)) {
+                    nodes.add(new Node(newX, newY));
+                }
+            }
+        }
+        return nodes;
+    }
+
+    private boolean isValidPosition(int x, int y, GameMap gameMap) {
+        return x >= 0 && x < gameMap.getMapSize() &&
+           y >= 0 && y < gameMap.getMapSize();
+}
 
 
 }
