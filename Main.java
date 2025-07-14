@@ -3,7 +3,6 @@ import jsclub.codefest.sdk.Hero;
 import jsclub.codefest.sdk.algorithm.PathUtils;
 import jsclub.codefest.sdk.base.Node;
 import jsclub.codefest.sdk.model.Element;
-import jsclub.codefest.sdk.model.ElementType;
 import jsclub.codefest.sdk.model.GameMap;
 import jsclub.codefest.sdk.model.armors.Armor;
 import jsclub.codefest.sdk.model.npcs.Ally;
@@ -14,9 +13,8 @@ import jsclub.codefest.sdk.model.weapon.Bullet;
 import jsclub.codefest.sdk.model.weapon.Weapon;
 import jsclub.codefest.sdk.socket.data.receive_data.Item;
 
-import javax.swing.text.Utilities;
-import java.io.IOError;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -25,7 +23,7 @@ import static jsclub.codefest.sdk.algorithm.PathUtils.*;
 
 public class Main {
     private static final String SERVER_URL = "https://cf25-server.jsclub.dev";
-    private static final String GAME_ID = "148810";
+    private static final String GAME_ID = "102415";
     private static final String PLAYER_NAME = "obslearn2code";
     private static final String SECRET_KEY = "sk-e0C0rY8MSDy3S1KJAuEvuQ:oC31IGg1xcdFU3qtR4o0Qy6hPyV-lX-EymaC9STy2i6n9NdaQAjp2hMQZy-rwzVNpVbta76POud9nC9EED1TFA";
 
@@ -80,6 +78,10 @@ class MapUpdateListener implements Emitter.Listener {
             if (shouldLootGun(ctx)){
                 lootGun(ctx);
                 return ;
+            }
+            if (checkItemAround(ctx)){
+                getItemAround(ctx);
+                return;
             }
             if (shouldLootMelee(ctx)){
                 lootMelee(ctx);
@@ -153,7 +155,7 @@ class MapUpdateListener implements Emitter.Listener {
         Player nearestBot = null;
         double minDistance = Double.MAX_VALUE;
         for (Player e : enemies) {
-            if (checkInsideSafeArea(e, gameMap.getSafeZone(), gameMap.getMapSize())) {
+            if (checkInsideSafeArea(e, gameMap.getSafeZone(), gameMap.getMapSize()) && e.getHealth() > 0) {
                 double distance = distance(player, e);
                 if (distance < minDistance) {
                     minDistance = distance;
@@ -378,6 +380,7 @@ class MapUpdateListener implements Emitter.Listener {
     }
 
 
+
     private Weapon checkDistanceAndUpdate(Player player, Weapon newWeapon, Weapon currentWeapon, double currentMinDistance) {
         if (newWeapon != null) {
             double newDistance = distance(player, newWeapon);
@@ -483,6 +486,9 @@ class MapUpdateListener implements Emitter.Listener {
 
         // Nếu pathToBot rỗng (đã sát enemy) => melee
         if (pathToBot.length() == 1) {
+            if (hero.getInventory().getSpecial() != null) {
+                hero.useSpecial(pathToBot);
+            }
             String dir = directionTo(ctx.player, e);
             hero.attack(dir);
             System.out.println("Attack " + dir);
@@ -492,6 +498,140 @@ class MapUpdateListener implements Emitter.Listener {
         // Nếu không bắn, không attack => di chuyển
         hero.move(pathToBot);
         System.out.println("Move to bot: " + pathToBot);
+    }
+
+    private void attackNearestBotWithThrowableAndGun(GameContext ctx) throws IOException {
+        Player enemy = ctx.nearestBot;
+        if (enemy == null) return;
+
+        int playerX = ctx.player.getX();
+        int playerY = ctx.player.getY();
+        int enemyX = enemy.getX();
+        int enemyY = enemy.getY();
+
+        int distanceX = Math.abs(playerX - enemyX);
+        int distanceY = Math.abs(playerY - enemyY);
+        int manhattanDistance = distanceX + distanceY;
+
+        int currentStep = ctx.gameMap.getStepNumber();
+
+        // --- Ưu tiên ném throwable trước ---
+        if (hero.getInventory().getThrowable() != null) {
+            int throwRange = hero.getInventory().getThrowable().getRange()[1] + hero.getInventory().getThrowable().getExplodeRange();
+            if (distance(ctx.player,enemy) <= throwRange) {
+                String throwDirection = getBestThrowableDirection(ctx, enemy);
+                hero.throwItem(throwDirection);
+                System.out.println("[BOT] Throwing throwable at enemy in direction: " + throwDirection);
+                return;
+            }
+        }
+
+        // --- Nếu không thể ném, xét bắn gun ---
+        if (hero.getInventory().getGun() != null) {
+            int gunRange = hero.getInventory().getGun().getRange()[1];
+            double cooldown = hero.getInventory().getGun().getCooldown();
+            boolean canShoot = (currentStep - lastShootTime >= cooldown);
+
+            if (canShoot) {
+                if (playerX == enemyX && distanceY <= gunRange) {
+                    hero.shoot(playerY > enemyY ? "d" : "u");
+                    lastShootTime = currentStep;
+                    System.out.println("[BOT] Shooting vertically at enemy.");
+                    return;
+                }
+
+                if (playerY == enemyY && distanceX <= gunRange) {
+                    hero.shoot(playerX < enemyX ? "r" : "l");
+                    lastShootTime = currentStep;
+                    System.out.println("[BOT] Shooting horizontally at enemy.");
+                    return;
+                }
+            }
+        }
+
+        // --- Nếu không ném hoặc bắn được, tìm vị trí tối ưu để giữ khoảng cách ---
+        String pathToOptimalPosition = findPositionForRangedAttack(ctx, enemy);
+        if (pathToOptimalPosition != null && !pathToOptimalPosition.isEmpty()) {
+            hero.move(pathToOptimalPosition);
+            System.out.println("[BOT] Moving to optimal ranged attack position: " + pathToOptimalPosition);
+        } else {
+            hero.move(PathUtils.getShortestPath(ctx.gameMap,ctx.nodesToAvoid,ctx.player,ctx.nearestBot,false));
+            System.out.println("[BOT] Holding position, waiting for throwable/gun cooldown.");
+        }
+    }
+    private String getBestThrowableDirection(GameContext ctx, Player enemy) {
+        Weapon throwable = hero.getInventory().getThrowable();
+        int throwRange = throwable.getRange()[1]; // tầm ném tối đa
+        int explosionRadius = throwable.getExplodeRange(); // bán kính nổ
+
+        Node botNode = new Node(ctx.player.getX(), ctx.player.getY());
+        Node enemyNode = new Node(enemy.getX(), enemy.getY());
+
+        String[] directions = {"r", "l", "d", "u"};
+        int[][] deltas = {{1,0}, {-1,0}, {0,-1}, {0,1}}; // r, l, u, d
+
+        for (int d = 0; d < 4; d++) {
+            int dx = deltas[d][0];
+            int dy = deltas[d][1];
+
+            for (int step = 1; step <= throwRange; step++) {
+                int throwX = botNode.getX() + dx * step;
+                int throwY = botNode.getY() + dy * step;
+
+                if (!isValidPosition(throwX, throwY, ctx.gameMap)) {
+                    break; // không thể ném xa hơn hướng này
+                }
+
+                // Kiểm tra enemy có nằm trong phạm vi nổ quanh vị trí ném không
+                if (Math.abs(throwX - enemyNode.getX()) + Math.abs(throwY - enemyNode.getY()) <= explosionRadius) {
+                    return directions[d];
+                }
+            }
+        }
+
+        return null; // không tìm được hướng ném hợp lý
+    }
+
+    // Hàm hỗ trợ:
+    private boolean isValidPosition(int x, int y, GameMap gameMap) {
+        return x >= 0 && y >= 0 && x < gameMap.getMapSize() && y < gameMap.getMapSize();
+    }
+
+    private String findPositionForRangedAttack(GameContext ctx, Player enemy) {
+        List<Node> potentialPositions = getNearbyNodes(ctx.player, hero.getInventory().getGun().getRange()[1], ctx.gameMap);
+        for (Node pos : potentialPositions) {
+            if (isInLineWith(pos, enemy) &&
+                    distance(pos, enemy) <= hero.getInventory().getGun().getRange()[1]) {
+                List<Node> tmpAvoid = ctx.nodesToAvoid;
+                String path = PathUtils.getShortestPath(ctx.gameMap, tmpAvoid, ctx.player, pos, false);
+                if (path != null && !path.isEmpty()) return path;
+            }
+        }
+        return null;
+    }
+    private List<Node> getNearbyNodes(Node center, int radius, GameMap gameMap) {
+        List<Node> nearbyNodes = new ArrayList<>();
+
+        int mapSize = gameMap.getMapSize();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                int nx = center.getX() + dx;
+                int ny = center.getY() + dy;
+
+                if (nx >= 0 && ny >= 0 && nx < mapSize && ny < mapSize) {
+                    int manhattan = Math.abs(dx) + Math.abs(dy);
+                    if (manhattan <= radius) {
+                        nearbyNodes.add(new Node(nx, ny));
+                    }
+                }
+            }
+        }
+        return nearbyNodes;
+    }
+
+    private boolean isInLineWith(Node a, Player b) {
+        return a.getX() == b.getX() || a.getY() == b.getY();
     }
 
     private String directionTo(Player player, Player e) {
@@ -564,21 +704,99 @@ class MapUpdateListener implements Emitter.Listener {
 
     }
 
-    private void pickNearestArmor(GameMap gameMap, Player player, List<Node> nodesToAvoid) throws IOException {
-        System.out.println("No armor found. Searching for a armor.");
-        String pathToArmor = findPathToArmor(gameMap, nodesToAvoid, player);
-        if (pathToArmor != null) {
-            if (pathToArmor.isEmpty()) {
-                hero.pickupItem();
-            } else {
-                hero.move(pathToArmor);
-            }
-        }
+//    private void pickNearestArmor(GameContext ctx) throws IOException {
+//        System.out.println("Pick nearest armor.");
+//        if (ctx.nearestArmor == null) {
+//            System.out.println("No armor found.");
+//        }
+//        String pathToArmor = PathUtils.getShortestPath(ctx.gameMap, getNodesToAvoid(ctx.gameMap), ctx.player, ctx.nearestArmor, false);
+//        if (pathToArmor != null) {
+//            if (pathToArmor.isEmpty()) {
+//                if (hero.getInventory().getArmor() == null) {
+//                    hero.pickupItem();
+//                }
+//                else {
+//                    hero.pickupItem();
+//                    hero.revokeItem(hero.getInventory().getArmor().getId());
+//                }
+//                if (hero.getInventory().getHelmet() == null) {
+//                    hero.pickupItem();
+//                }
+//                else {
+//                    hero.pickupItem();
+//                    hero.revokeItem(hero.getInventory().getHelmet().getId());
+//                }
+//
+//            } else {
+//                hero.move(pathToArmor);
+//            }
+//        }
+//    }
+private void pickNearestArmor(GameContext ctx) throws IOException {
+    System.out.println("Pick nearest armor.");
+    if (ctx.nearestArmor == null) {
+        System.out.println("No armor found.");
+        return;
     }
 
-    private void pickNearestToSupportItem(GameMap gameMap, Player player, List<Node> nodes) throws IOException {
+    String pathToArmor = PathUtils.getShortestPath(
+            ctx.gameMap,
+            getNodesToAvoid(ctx.gameMap),
+            ctx.player,
+            ctx.nearestArmor,
+            false
+    );
+
+    if (pathToArmor == null) {
+        System.out.println("No path to armor.");
+        return;
+    }
+
+    if (pathToArmor.isEmpty()) {
+        // Đang đứng ngay armor, kiểm tra loại armor là ARMOR hay HELMET
+        Element element = ctx.gameMap.getElementByIndex(
+                ctx.nearestArmor.getX(),
+                ctx.nearestArmor.getY()
+        );
+        if (element == null) {
+            System.out.println("No element found at armor location.");
+            return;
+        }
+
+        switch (element.getType()) {
+            case ARMOR:
+                if (hero.getInventory().getArmor() != null) {
+                    System.out.println("Revoking old armor: " + hero.getInventory().getArmor().getId());
+                    hero.revokeItem(hero.getInventory().getArmor().getId());
+                }
+                hero.pickupItem();
+                System.out.println("Picked up new armor.");
+                break;
+
+            case HELMET:
+                if (hero.getInventory().getHelmet() != null) {
+                    System.out.println("Revoking old helmet: " + hero.getInventory().getHelmet().getId());
+                    hero.revokeItem(hero.getInventory().getHelmet().getId());
+                }
+                hero.pickupItem();
+                System.out.println("Picked up new helmet.");
+                break;
+
+            default:
+                System.out.println("Element at target is not armor or helmet: " + element.getType());
+                break;
+        }
+
+    } else {
+        // Chưa đến, di chuyển
+        hero.move(pathToArmor);
+        System.out.println("Moving to armor with path: " + pathToArmor);
+    }
+}
+
+    private void pickNearestToSupportItem(GameContext ctx) throws IOException {
         System.out.println("Searching for supportItem");
-        String supportItem = findPathToSupportItem(gameMap, getNodesToAvoid(gameMap), player);
+        String supportItem = PathUtils.getShortestPath(ctx.gameMap, getNodesToAvoid(ctx.gameMap), ctx.player,ctx.nearestSupportItem,false);
         if (supportItem != null) {
             if (supportItem.isEmpty()) {
                 hero.pickupItem();
@@ -588,9 +806,9 @@ class MapUpdateListener implements Emitter.Listener {
         }
     }
 
-    private void pickNearestSpecial(GameMap gameMap, Player player, List<Node> nodes) throws IOException {
-        Weapon special = getNearestSpecial(gameMap, player);
-        String pathToGetSpecial = getShortestPath(gameMap, nodes, player, special, false);
+    private void pickNearestSpecial(GameContext ctx) throws IOException {
+        Weapon special = ctx.nearestSpecial;
+        String pathToGetSpecial = getShortestPath(ctx.gameMap, ctx.nodesToAvoid, ctx.player, special, false);
         if (pathToGetSpecial != null) {
             if (pathToGetSpecial.isEmpty()) {
                 if (hero.getInventory().getSpecial() == null) {
@@ -621,9 +839,9 @@ class MapUpdateListener implements Emitter.Listener {
 
     }
 
-    private void pickNearestThrowable(GameMap gameMap, Player player, List<Node> nodes) throws IOException {
-        Weapon throwable = getNearestThrowable(gameMap, player);
-        String pathToGetThrowable = getShortestPath(gameMap, getNodesToAvoid(gameMap), player, throwable, false);
+    private void pickNearestThrowable(GameContext ctx) throws IOException {
+        Weapon throwable = ctx.nearestThrowable;
+        String pathToGetThrowable = getShortestPath(ctx.gameMap, ctx.nodesToAvoid, ctx.player, throwable, false);
         if (pathToGetThrowable != null) {
             if (pathToGetThrowable.isEmpty()) {
                 if (hero.getInventory().getThrowable() == null) {
@@ -640,99 +858,111 @@ class MapUpdateListener implements Emitter.Listener {
 
     }
 
-    private boolean checkItemAround(GameMap gameMap, Player player) {
-        Weapon gun = getNearestGun(gameMap, player);
-        Weapon melee = getNearestMelee(gameMap, player);
-        Weapon special = getNearestSpecial(gameMap, player);
-        Node chest = getNearestChest(gameMap, player);
-        Armor helmet = getNearestArmor(gameMap, player);
-        SupportItem supportItem = getNearestSupportItem(gameMap, player);
+    private boolean checkItemAround(GameContext ctx) {
+        Weapon gun = ctx.nearestGun;
+        Weapon melee = ctx.nearestMelee;
+        Weapon special = ctx.nearestSpecial;
+        Node chest = ctx.nearestChest;
+        Armor armor = ctx.nearestArmor;
+        SupportItem supportItem = ctx.nearestSupportItem;
 
         System.out.println("check Item Around");
 
-        if (gun != null) System.out.println("dis gun: " + distance(gun, player));
-        if (melee != null) System.out.println("dis melee: " + distance(melee, player));
-        if (special != null) System.out.println("dis special: " + distance(special, player));
-        if (chest != null) System.out.println("dis chest: " + distance(chest, player));
-        if (helmet != null) System.out.println("dis helmet: " + distance(helmet, player));
-        if (supportItem != null) System.out.println("dis support: " + distance(supportItem, player));
+        if (gun != null) System.out.println("dis gun: " + distance(gun, ctx.player));
+        if (melee != null) System.out.println("dis melee: " + distance(melee, ctx.player));
+        if (special != null) System.out.println("dis special: " + distance(special, ctx.player));
+        if (chest != null) System.out.println("dis chest: " + distance(chest, ctx.player));
+        if (armor != null) System.out.println("dis armor: " + distance(armor, ctx.player));
+        if (supportItem != null) System.out.println("dis support: " + distance(supportItem, ctx.player));
 
-        return (gun != null && distance(gun, player) <= 3)
-                || (melee != null && distance(melee, player) <= 3)
-                || (special != null && distance(special, player) <= 3)
-                || (chest != null && distance(chest, player) <= 3)
-                || (helmet != null && distance(helmet, player) <= 3 &&
+        return (gun != null && distance(gun, ctx.player) <= 3)
+                || (melee != null && distance(melee, ctx.player) <= 3)
+                || (special != null && distance(special, ctx.player) <= 3)
+                || (chest != null && distance(chest, ctx.player) <= 3)
+                || (armor != null && distance(armor, ctx.player) <= 3 &&
                 (hero.getInventory().getArmor() == null || hero.getInventory().getHelmet() == null))
-                || (supportItem != null && distance(supportItem, player) <= 3 &&
+                || (supportItem != null && distance(supportItem, ctx.player) <= 3 &&
                 hero.getInventory().getListSupportItem().size() <= 3);
     }
 
-//    private void getItemAround(GameMap gameMap, Player player) throws IOException {
-//        System.out.println("GO around to get Armor and SpItems and enhance Weapon");
-//
-//        Weapon gun = getNearestGun(gameMap, player);
-//        Weapon melee = getNearestMelee(gameMap, player);
-//        Weapon special = getNearestSpecial(gameMap, player);
-//        Weapon throwable = getNearestThrowable(gameMap, player);
-//        Node chest = getNearestChest(gameMap, player);
-//        Armor helmet = getNearestArmor(gameMap, player);
-//        SupportItem supportItem = getNearestSupportItem(gameMap, player);
-//        System.out.println("see some Items around");
-//
-//        if (gun != null && PathUtils.distance(gun, player) <= 3) {
-//            System.out.println("go to get gun:");
-//            String pathToGun = findPathToGun(gameMap, getNodesToAvoid(gameMap), player);
-//            if (pathToGun != null) {
-//                if (pathToGun.isEmpty()) {
-//                    System.out.println("go pick gun");
-//                    if (hero.getInventory().getGun() == null) {
-//                        System.out.println("just pick");
-//                        hero.pickupItem();
-//                    } else {
-//                        System.out.println("thrown weapon to pick a new gun");
-//                        hero.pickupItem();
-//                        hero.revokeItem(hero.getInventory().getGun().getId());
-//                    }
-//                } else {
-//                    hero.move(pathToGun);
-//                }
-//            }
-//        } else if (melee != null && PathUtils.distance(melee, player) <= 3) {
-//            System.out.println("Pick melee");
-//            String pathToGetMelee = findPathToMelee(gameMap, getNodesToAvoid(gameMap), player);
-//            if (pathToGetMelee != null) {
-//                if (pathToGetMelee.isEmpty()) {
-//                    if (hero.getInventory().getMelee().getId().equals("HAND")) {
-//                        System.out.println("dont have melee and pick");
-//                        hero.pickupItem();
-//                    } else {
-//                        hero.pickupItem();
-//                        System.out.println("have melee and change to pick");
-//                        hero.revokeItem(hero.getInventory().getMelee().getId());
-//                    }
-//                } else {
-//                    hero.move(pathToGetMelee);
-//                }
-//            }
-//        } else if (supportItem != null && PathUtils.distance(supportItem, player) <= 3 &&
-//                hero.getInventory().getListSupportItem().size() <= 3) {
-//            System.out.println("pick support item");
-//            pickNearestToSupportItem(gameMap, player, getNodesToAvoid(gameMap));
-//        } else if (throwable != null && PathUtils.distance(throwable, player) <= 3) {
-//            System.out.println("pick throwable");
-//            pickNearestThrowable(gameMap, player, getNodesToAvoid(gameMap));
-//        } else if (chest != null && PathUtils.distance(chest, player) <= 3) {
-//            System.out.println("pick chest");
-//            pickNearestChest(gameMap, player, getNodesToAvoid(gameMap));
-//        } else if (special != null && PathUtils.distance(special, player) <= 3) {
-//            System.out.println("Pick special weapon");
-//            pickNearestSpecial(gameMap, player, getNodesToAvoid(gameMap));
-//        } else if (helmet != null && PathUtils.distance(helmet, player) <= 3 &&
-//                (hero.getInventory().getArmor() == null || hero.getInventory().getHelmet() == null)) {
-//            System.out.println("pick helmet");
-//            pickNearestArmor(gameMap, player, getNodesToAvoid(gameMap));
-//        }
-//    }
+    private void getItemAround(GameContext ctx) throws IOException {
+        System.out.println("GO around to get Armor and SpItems and enhance Weapon");
+
+        Weapon gun = ctx.nearestGun;
+        Weapon melee = ctx.nearestMelee;
+        Weapon special = ctx.nearestSpecial;
+        Weapon throwable = ctx.nearestThrowable;
+        Node chest = ctx.nearestChest;
+        Armor armor = ctx.nearestArmor;
+        SupportItem supportItem = ctx.nearestSupportItem;
+        System.out.println("see some Items around");
+
+        if (gun != null && PathUtils.distance(gun, ctx.player) <= 3) {
+            System.out.println("go to get gun:");
+            String pathToGun = findPathToGun(ctx.gameMap, getNodesToAvoid(ctx.gameMap), ctx.player);
+            if (pathToGun != null) {
+                if (pathToGun.isEmpty()) {
+                    System.out.println("go pick gun");
+                    if (hero.getInventory().getGun() == null) {
+                        System.out.println("just pick");
+                        hero.pickupItem();
+                    } else {
+                        System.out.println("thrown weapon to pick a new gun");
+                        hero.pickupItem();
+                        hero.revokeItem(hero.getInventory().getGun().getId());
+                    }
+                } else {
+                    hero.move(pathToGun);
+                }
+            }
+        }
+        if (melee != null && PathUtils.distance(melee,ctx.player) <= 3) {
+            System.out.println("Pick melee");
+            String pathToGetMelee = findPathToMelee(ctx.gameMap, getNodesToAvoid(ctx.gameMap), ctx.player);
+            if (pathToGetMelee != null) {
+                if (pathToGetMelee.isEmpty()) {
+                    if (hero.getInventory().getMelee().getId().equals("HAND")) {
+                        System.out.println("dont have melee and pick");
+                        hero.pickupItem();
+                    } else {
+                        hero.pickupItem();
+                        System.out.println("have melee and change to pick");
+                        hero.revokeItem(hero.getInventory().getMelee().getId());
+                    }
+                } else {
+                    hero.move(pathToGetMelee);
+                }
+            }
+        }
+        if (supportItem != null && PathUtils.distance(supportItem, ctx.player) <= 3 &&
+                hero.getInventory().getListSupportItem().size() <= 3) {
+            System.out.println("Pick support item");
+            pickNearestToSupportItem(ctx);
+        }
+        if (throwable != null && PathUtils.distance(throwable, ctx.player) <= 3) {
+            System.out.println("Pick throwable");
+            pickNearestThrowable(ctx);
+        }
+        if (chest != null && PathUtils.distance(chest, ctx.player) <= 3) {
+            System.out.println("pick chest");
+            pickNearestChest(ctx);
+        }
+        if (special != null && PathUtils.distance(special, ctx.player) <= 3) {
+            System.out.println("Pick special weapon");
+            pickNearestSpecial(ctx);
+        }
+        if (armor != null){
+            if (PathUtils.distance(armor, ctx.player) <= 3) {
+                if (hero.getInventory().getArmor() == null || hero.getInventory().getHelmet() == null) {
+                    pickNearestArmor(ctx);
+                }
+                else if (hero.getInventory().getArmor()!= null && armor.getDamageReduce() > hero.getInventory().getArmor().getDamageReduce()) {
+                    pickNearestArmor(ctx);
+                }
+
+            }
+        }
+    }
 
     public class GameContext {
         public GameMap gameMap;
@@ -745,16 +975,16 @@ class MapUpdateListener implements Emitter.Listener {
         public Weapon nearestMelee;
         public Obstacle nearestChest;
         public Armor nearestArmor;
-        public Armor nearestHelmet;
         public Weapon nearestThrowable;
         public Player nearestBot;
-        public SupportItem nearestHealth;
+        public SupportItem nearestSupportItem;
+        public Weapon nearestSpecial;
 
         public List<Bullet> bullets;
         public List<Player> enemies;
         public List<Item> items;
 
-        public List<Node> stuffs;
+        public List<Node> stuffs = new ArrayList<>();
 
         // Constructor
         public GameContext(GameMap gameMap, Player player) {
@@ -771,25 +1001,28 @@ class MapUpdateListener implements Emitter.Listener {
             stuffs.addAll(gameMap.getAllSpecial());
             stuffs.addAll(gameMap.getListArmors());
             stuffs.addAll(gameMap.getListSupportItems());
-            stuffs.sort(Comparator.comparingInt(p -> distance(p, this.player)));
+            if (!stuffs.isEmpty()) {
+                stuffs.sort(Comparator.comparingInt(p -> distance(p, this.player)));
+            }
 
 
             // Cache nearest items
             this.nearestGun = getNearestGun(gameMap, player);
             this.nearestMelee = getNearestMelee(gameMap, player);
             this.nearestChest = getNearestChest(gameMap, player);
-            this.nearestArmor = getNearestArmorInRange(gameMap, player);
+            this.nearestArmor = getNearestArmor(gameMap, player);
             this.nearestThrowable = getNearestThrowableInRange(gameMap, player);
             this.nearestBot = getNearestBot(gameMap, player);
-            this.nearestHealth = getNearestSupportItem(gameMap, player);
+            this.nearestSupportItem = getNearestSupportItem(gameMap, player);
+            this.nearestSpecial = getNearestSpecial(gameMap, player);
         }
     }
 
     private boolean shouldHeal(GameContext ctx) {
-        return ctx.player.getHealth() < 40 && hero.getInventory().getSpecial() != null;
+        return ctx.player.getHealth() < 80 && !hero.getInventory().getListSupportItem().isEmpty();
     }
 //    private void heal(GameContext ctx) throws IOException {
-//        hero.move(getShortestPath(ctx.gameMap,ctx.nodesToAvoid,ctx.player,ctx.nearestHealth,false));
+//        hero.move(getShortestPath(ctx.gameMap,ctx.nodesToAvoid,ctx.player,ctx.nearestSupportItem,false));
 //    }
 
     private boolean shouldLootGun(GameContext ctx) {
@@ -805,92 +1038,11 @@ class MapUpdateListener implements Emitter.Listener {
     private void lootMelee(GameContext ctx) throws IOException{
         pickNearestMelee(ctx);
     }
-    private boolean shouldLootStuff(GameContext ctx) {
-        int i = 0;
-        while (i < ctx.stuffs.size()) {
-            Node n = ctx.stuffs.get(i);
-            if (distance(ctx.player, n) <= 3 && shouldLootThis(n, ctx)) {
-                return true; // Dừng ngay khi tìm thấy
-            }
-            i++;
-        }
-        return false; // Không tìm thấy node nào thỏa điều kiện
-    }
-    private boolean shouldLootThis(Node node, GameContext ctx) {
-        Element element = ctx.gameMap.getElementByIndex(node.getX(), node.getY());
-
-        if (element == null) return false; // an toàn
-
-        switch (element.getType()) {
-            case PLAYER:
-            case ENEMY:
-            case ALLY:
-            case CHEST:
-            case TRAP:
-            case INDESTRUCTIBLE:
-            case ROAD:
-            case BULLET:
-                return false; // không loot
-
-            case GUN:
-                // Loot nếu chưa có gun
-                if (hero.getInventory().getGun() == null) return true;
-                // Loot nếu gun mới mạnh hơn (nếu bạn muốn so damage)
-                if (ctx.nearestGun != null && ctx.nearestGun.getDamage() > hero.getInventory().getGun().getDamage()) {
-                    return true;
-                }
-                return false;
-
-            case MELEE:
-                if (hero.getInventory().getMelee() == null) return true;
-                if (hero.getInventory().getMelee().getId().equals("HAND")) return true;
-                // So sánh damage nếu muốn:
-                if (ctx.nearestMelee != null && ctx.nearestMelee.getDamage() > hero.getInventory().getMelee().getDamage()) {
-                    return true;
-                }
-                return false;
-
-            case THROWABLE:
-                if (hero.getInventory().getThrowable() == null) return true;
-                if (ctx.nearestThrowable != null && ctx.nearestThrowable.getDamage() > hero.getInventory().getThrowable().getDamage()) {
-                    return true;
-                }
-                return false;
-
-            case SPECIAL:
-                // Nếu bạn muốn auto loot SPECIAL, return true;
-                return true;
-
-            case HEALING_ITEM:
-            case SUPPORT_ITEM:
-                // Loot nếu còn slot support item
-                return hero.getInventory().getListSupportItem().size() < 3;
-
-            case ARMOR:
-                if (hero.getInventory().getArmor() == null) return true;
-                if (ctx.nearestArmor != null && ctx.nearestArmor.getDamageReduce() > hero.getInventory().getArmor().getDamageReduce()) {
-                    return true;
-                }
-                return false;
-
-            case HELMET:
-                if (hero.getInventory().getHelmet() == null) return true;
-                if (ctx.nearestHelmet != null && ctx.nearestHelmet.getDamageReduce() > hero.getInventory().getHelmet().getDamageReduce()) {
-                    return true;
-                }
-                return false;
-
-            default:
-                throw new IllegalStateException("Unexpected ElementType: " + element.getType());
-        }
-    }
 
     private boolean shouldBreakChest(GameContext ctx) {
         if (ctx.nearestChest == null)
             return false;
-        if (hero.getInventory().getMelee().getId().equals("HAND"))
-            return true;
-        return true;
+        return hero.getInventory().getMelee().getId().equals("HAND");
     }
     private void breakChest(GameContext ctx) throws IOException{
         System.out.println("Chest");
@@ -903,7 +1055,12 @@ class MapUpdateListener implements Emitter.Listener {
 
     private void attack(GameContext ctx) throws IOException{
         System.out.println("Attacking");
-        attackNearestBot(ctx);
+        if (hero.getInventory().getThrowable() != null) {
+            attackNearestBotWithThrowableAndGun(ctx);
+        }
+        else{
+            attackNearestBot(ctx);
+        }
     }
 
 
