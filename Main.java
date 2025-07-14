@@ -512,15 +512,6 @@ class MapUpdateListener implements Emitter.Listener {
                 return;
             }
         }
-
-        String pathToHealth = findPathToHealth(gameMap, nodesToAvoid, player);
-        if (pathToHealth == null) {
-            System.out.println("No nearest health found.");
-            return;
-        }
-
-        System.out.println("Health found: " + pathToHealth);
-        hero.move(pathToHealth);
     }
 
 
